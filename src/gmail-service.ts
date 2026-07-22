@@ -34,6 +34,26 @@ export interface UnsubscribeResult {
   detail: string;
 }
 
+export interface ComposeParams {
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject: string;
+  body: string;
+  replyToMessageId?: string;
+}
+
+export interface DraftResult {
+  draftId: string;
+  messageId: string;
+  threadId: string;
+}
+
+export interface SendResult {
+  messageId: string;
+  threadId: string;
+}
+
 // ---------------------------------------------------------------------------
 // Gmail Service — one instance per access token (per session)
 // ---------------------------------------------------------------------------
@@ -311,6 +331,94 @@ export class GmailService {
       userId: "me",
       requestBody: { raw },
     });
+  }
+
+  // -----------------------------------------------------------------------
+  // Shared MIME builder for create_draft / send_email
+  // -----------------------------------------------------------------------
+
+  private async buildRawMessage(
+    params: ComposeParams
+  ): Promise<{ raw: string; threadId?: string }> {
+    const headers = [
+      `To: ${params.to.join(", ")}`,
+      params.cc && params.cc.length ? `Cc: ${params.cc.join(", ")}` : null,
+      params.bcc && params.bcc.length ? `Bcc: ${params.bcc.join(", ")}` : null,
+      `Subject: ${params.subject}`,
+      `Content-Type: text/plain; charset="UTF-8"`,
+    ].filter((h): h is string => h !== null);
+
+    let threadId: string | undefined;
+
+    if (params.replyToMessageId) {
+      const original = await this.gmail.users.messages.get({
+        userId: "me",
+        id: params.replyToMessageId,
+        format: "metadata",
+        metadataHeaders: ["Message-ID", "References"],
+      });
+
+      const originalHeaders = original.data.payload?.headers ?? [];
+      const messageIdHeader = originalHeaders.find(
+        (h) => h.name?.toLowerCase() === "message-id"
+      )?.value;
+      const referencesHeader = originalHeaders.find(
+        (h) => h.name?.toLowerCase() === "references"
+      )?.value;
+
+      if (messageIdHeader) {
+        headers.push(`In-Reply-To: ${messageIdHeader}`);
+        headers.push(
+          `References: ${referencesHeader ? `${referencesHeader} ${messageIdHeader}` : messageIdHeader}`
+        );
+      }
+      threadId = original.data.threadId ?? undefined;
+    }
+
+    const raw = Buffer.from([...headers, "", params.body].join("\r\n")).toString(
+      "base64url"
+    );
+
+    return { raw, threadId };
+  }
+
+  // -----------------------------------------------------------------------
+  // create_draft — never sends, just saves for human review
+  // -----------------------------------------------------------------------
+
+  async createDraft(params: ComposeParams): Promise<DraftResult> {
+    const { raw, threadId } = await this.buildRawMessage(params);
+
+    const res = await this.gmail.users.drafts.create({
+      userId: "me",
+      requestBody: {
+        message: { raw, threadId },
+      },
+    });
+
+    return {
+      draftId: res.data.id!,
+      messageId: res.data.message?.id ?? "",
+      threadId: res.data.message?.threadId ?? threadId ?? "",
+    };
+  }
+
+  // -----------------------------------------------------------------------
+  // send_email — irreversible, delivers immediately
+  // -----------------------------------------------------------------------
+
+  async sendEmail(params: ComposeParams): Promise<SendResult> {
+    const { raw, threadId } = await this.buildRawMessage(params);
+
+    const res = await this.gmail.users.messages.send({
+      userId: "me",
+      requestBody: { raw, threadId },
+    });
+
+    return {
+      messageId: res.data.id!,
+      threadId: res.data.threadId ?? threadId ?? "",
+    };
   }
 
   // -----------------------------------------------------------------------

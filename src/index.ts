@@ -18,6 +18,7 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD!;
 const SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.modify",
+  "https://www.googleapis.com/auth/gmail.compose",
   "https://www.googleapis.com/auth/userinfo.email",
 ];
 
@@ -269,6 +270,106 @@ function createMcpServer(): McpServer {
           {
             type: "text" as const,
             text: JSON.stringify({ account, ...result }, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  // ---- create_draft ----
+  server.tool(
+    "create_draft",
+    "Create a draft email. Does NOT send it — the draft is saved in Gmail for a human to review and send manually. Use reply_to_message_id to draft a reply within an existing thread (sets In-Reply-To/References and keeps it in the same thread).",
+    {
+      account: z
+        .string()
+        .describe("Email address of the account to create the draft in"),
+      to: z.array(z.string()).describe("Recipient email addresses"),
+      cc: z
+        .array(z.string())
+        .optional()
+        .describe("CC recipient email addresses"),
+      bcc: z
+        .array(z.string())
+        .optional()
+        .describe("BCC recipient email addresses"),
+      subject: z.string().describe("Email subject line"),
+      body: z.string().describe("Plain-text email body"),
+      reply_to_message_id: z
+        .string()
+        .optional()
+        .describe(
+          "Gmail message ID to reply to, if this draft is a reply to an existing message"
+        ),
+    },
+    async ({ account, to, cc, bcc, subject, body, reply_to_message_id }) => {
+      const gmail = await getGmailServiceForAccount(account);
+      const result = await gmail.createDraft({
+        to,
+        cc,
+        bcc,
+        subject,
+        body,
+        replyToMessageId: reply_to_message_id,
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              account,
+              ...result,
+              message: `Draft created (not sent). Draft ID: ${result.draftId}.`,
+            }),
+          },
+        ],
+      };
+    }
+  );
+
+  // ---- send_email ----
+  server.tool(
+    "send_email",
+    "Compose and IMMEDIATELY send an email. This is irreversible — the message is delivered right away, there is no review step. Prefer create_draft unless the user has explicitly asked for this specific email to be sent without review.",
+    {
+      account: z.string().describe("Email address of the account to send from"),
+      to: z.array(z.string()).describe("Recipient email addresses"),
+      cc: z
+        .array(z.string())
+        .optional()
+        .describe("CC recipient email addresses"),
+      bcc: z
+        .array(z.string())
+        .optional()
+        .describe("BCC recipient email addresses"),
+      subject: z.string().describe("Email subject line"),
+      body: z.string().describe("Plain-text email body"),
+      reply_to_message_id: z
+        .string()
+        .optional()
+        .describe(
+          "Gmail message ID to reply to, if this is a reply to an existing message"
+        ),
+    },
+    async ({ account, to, cc, bcc, subject, body, reply_to_message_id }) => {
+      const gmail = await getGmailServiceForAccount(account);
+      const result = await gmail.sendEmail({
+        to,
+        cc,
+        bcc,
+        subject,
+        body,
+        replyToMessageId: reply_to_message_id,
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              account,
+              ...result,
+              message: `Email sent successfully to ${to.join(", ")}.`,
+            }),
           },
         ],
       };
